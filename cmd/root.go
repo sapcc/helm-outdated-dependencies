@@ -17,6 +17,7 @@ func New() *cobra.Command {
 		Use:   "outdated-dependencies",
 		Short: "outdeps",
 		Long:  rootCmdLongUsage,
+		ValidArgs: []string{"chartPath"},
 	}
 
 	cmd.AddCommand(
@@ -25,4 +26,9 @@ func New() *cobra.Command {
 	)
 
 	return cmd
+}
+
+func addCommonFlags(cmd *cobra.Command) {
+	cmd.Flags().IntP("max-column-width", "w", 60, "Max column width to use for tables")
+	cmd.Flags().StringSliceP("repositories", "r", []string{}, "Limit search to the given repositories.")
 }

@@ -11,9 +11,12 @@ import (
 
 type (
 	updateCmd struct {
-		chartPath      string
-		helmSettings   *helm_env.EnvSettings
-		maxColumnWidth uint
+		chartPath               string
+		helmSettings            *helm_env.EnvSettings
+		maxColumnWidth          uint
+		indent                  int
+		isIncrementChartVersion bool
+		repositories []string
 	}
 )
 
@@ -27,10 +30,11 @@ Examples:
 
 func newUpdateOutdatedDependenciesCmd() *cobra.Command {
 	u := &updateCmd{
-		maxColumnWidth: 60,
 		helmSettings: &helm_env.EnvSettings{
 			Home: helm.GetHelmHome(),
 		},
+		maxColumnWidth: 60,
+		repositories: []string{},
 	}
 
 	cmd := &cobra.Command{
@@ -38,6 +42,14 @@ func newUpdateOutdatedDependenciesCmd() *cobra.Command {
 		Long:         listLongUsage,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if maxColumnWidth, err := cmd.Flags().GetUint("max-column-width"); err == nil {
+				u.maxColumnWidth = maxColumnWidth
+			}
+
+			if repositories, err := cmd.Flags().GetStringSlice("repositories"); err == nil {
+				u.repositories = repositories
+			}
+
 			path := "."
 			if len(args) > 0 {
 				path = args[0]
@@ -52,18 +64,33 @@ func newUpdateOutdatedDependenciesCmd() *cobra.Command {
 		},
 	}
 
+	addCommonFlags(cmd)
+	cmd.Flags().BoolVarP(&u.isIncrementChartVersion, "increment-chart-version", "", false, "Increment the version of the Helm chart if requirements are updated.")
+	cmd.Flags().IntVarP(&u.indent, "indent", "", 4, "Indent to use when writing the requirements.yaml .")
+
 	return cmd
 }
 
 func (u *updateCmd) update() error {
-	outdatedDeps, err := helm.ListOutdatedDependencies(u.chartPath, u.helmSettings)
+	outdatedDeps, err := helm.ListOutdatedDependencies(u.chartPath, u.helmSettings, u.repositories)
 	if err != nil {
 		return err
 	}
 
+	if len(outdatedDeps) == 0 {
+		fmt.Println("All charts up-to-date.")
+		return nil
+	}
+
 	fmt.Println(u.formatResults(outdatedDeps))
 
-	return helm.UpdateDependencies(u.chartPath, outdatedDeps)
+	if u.isIncrementChartVersion {
+		if err = helm.IncrementChartVersion(u.chartPath); err != nil {
+			return err
+		}
+	}
+
+	return helm.UpdateDependencies(u.chartPath, outdatedDeps, u.indent)
 }
 
 func (u *updateCmd) formatResults(results []*helm.Result) string {

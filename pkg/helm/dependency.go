@@ -1,23 +1,30 @@
 package helm
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/Masterminds/semver"
-	"github.com/ghodss/yaml"
+	yamlv3 "gopkg.in/yaml.v3"
 	"k8s.io/helm/pkg/chartutil"
 	"k8s.io/helm/pkg/getter"
 	helm_env "k8s.io/helm/pkg/helm/environment"
 	"k8s.io/helm/pkg/helm/helmpath"
+	"k8s.io/helm/pkg/proto/hapi/chart"
 	"k8s.io/helm/pkg/repo"
 )
 
-const requirementsName = "requirements.yaml"
+const (
+	requirementsName  = "requirements.yaml"
+	chartMetadataName = "Chart.yaml"
+)
 
 // Result ...
 type Result struct {
@@ -46,7 +53,7 @@ func LoadDependencies(chartPath string) (*chartutil.Requirements, error) {
 }
 
 // ListOutdatedDependencies returns a list of outdated dependencies of the given chart.
-func ListOutdatedDependencies(chartPath string, helmSettings *helm_env.EnvSettings) ([]*Result, error) {
+func ListOutdatedDependencies(chartPath string, helmSettings *helm_env.EnvSettings, repositoryFilter []string) ([]*Result, error) {
 	chartDeps, err := LoadDependencies(chartPath)
 	if err != nil {
 		if err == chartutil.ErrRequirementsNotFound {
@@ -55,6 +62,9 @@ func ListOutdatedDependencies(chartPath string, helmSettings *helm_env.EnvSettin
 		}
 		return nil, err
 	}
+
+	// Consider only dependencies in the given repositories.
+	chartDeps = filterDependencies(chartDeps, repositoryFilter)
 
 	var res []*Result
 	for _, dep := range chartDeps.Dependencies {
@@ -82,7 +92,7 @@ func ListOutdatedDependencies(chartPath string, helmSettings *helm_env.EnvSettin
 }
 
 // UpdateDependencies updates the dependencies of the given chart.
-func UpdateDependencies(chartPath string, reqsToUpdate []*Result) error {
+func UpdateDependencies(chartPath string, reqsToUpdate []*Result, indent int) error {
 	c, err := chartutil.Load(chartPath)
 	if err != nil {
 		return err
@@ -101,7 +111,7 @@ func UpdateDependencies(chartPath string, reqsToUpdate []*Result) error {
 		}
 	}
 
-	return writeRequirements(chartPath, reqs)
+	return writeRequirements(chartPath, reqs, indent)
 }
 
 // FindLatestVersionOfDependency returns the latest version of the given dependency in the repository.
@@ -137,21 +147,30 @@ func FindLatestVersionOfDependency(dep *chartutil.Dependency, helmSettings *helm
 	return semver.NewVersion(cv.Version)
 }
 
-func writeRequirements(chartPath string, reqs *chartutil.Requirements) error {
-	// Unfortunately chartutil.Requirements only has the JSON omitempty annotations, but not the YAML ones.
-	// So we have to take the JSON detour.
-	data, err := json.Marshal(reqs)
+// IncrementChart version increments the patch version of the Chart.
+func IncrementChartVersion(chartPath string) error {
+	c, err := chartutil.Load(chartPath)
 	if err != nil {
 		return err
 	}
 
-	data, err = yaml.JSONToYAML(data)
+	chartVersion, err := getChartVersion(c)
 	if err != nil {
 		return err
 	}
 
-	requirementsPath := path.Join(chartPath, requirementsName)
-	absPath, err := filepath.Abs(requirementsPath)
+	v := chartVersion.IncPatch()
+	c.Metadata.Version = v.String()
+	return writeChartMetadata(chartPath, c.Metadata)
+}
+
+func writeChartMetadata(chartPath string, c *chart.Metadata) error {
+	data, err := toYamlWithIndent(c, 0)
+	if err != nil {
+		return err
+	}
+
+	absPath, err := filepath.Abs(path.Join(chartPath, chartMetadataName))
 	if err != nil {
 		return err
 	}
@@ -164,4 +183,84 @@ func writeRequirements(chartPath string, reqs *chartutil.Requirements) error {
 
 	_, err = f.WriteAt(data, 0)
 	return err
+}
+
+func writeRequirements(chartPath string, reqs *chartutil.Requirements, indent int) error {
+	data, err := toYamlWithIndent(reqs, indent)
+	if err != nil {
+		return err
+	}
+
+	absPath, err := filepath.Abs(path.Join(chartPath, requirementsName))
+	if err != nil {
+		return err
+	}
+
+	f, err := os.OpenFile(absPath, os.O_RDWR, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = f.WriteAt(data, 0)
+	return err
+}
+
+func toYamlWithIndent(in interface{}, indent int) ([]byte, error) {
+	// Unfortunately chartutil.Requirements, charts.Chart structs only have the JSON anchors, but not the YAML ones.
+	// So we have to take the JSON detour.
+	jsonData, err := json.Marshal(in)
+	if err != nil {
+		return nil, err
+	}
+
+	var jsonObj interface{}
+	if err := yamlv3.Unmarshal(jsonData, &jsonObj); err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	enc := yamlv3.NewEncoder(&buf)
+	defer enc.Close()
+	enc.SetIndent(indent)
+	err = enc.Encode(jsonObj)
+	return buf.Bytes(), err
+}
+
+func getChartVersion(c *chart.Chart) (*semver.Version, error) {
+	m := c.GetMetadata()
+	if m == nil {
+		return nil, errors.New("chart has no metdata")
+	}
+
+	v := m.GetVersion()
+	if v == "" {
+		return nil, errors.New("chart has no version")
+	}
+
+	return semver.NewVersion(v)
+}
+
+func filterDependencies(reqs *chartutil.Requirements, repositoryFilter []string) *chartutil.Requirements {
+	var filteredDeps []*chartutil.Dependency
+	if repositoryFilter != nil && len(repositoryFilter) > 0 {
+		for _, dep := range reqs.Dependencies {
+			if stringSliceContains(repositoryFilter, dep.Repository) {
+				filteredDeps = append(filteredDeps, dep)
+			}
+		}
+	} else {
+		filteredDeps = reqs.Dependencies
+	}
+	reqs.Dependencies = filteredDeps
+	return reqs
+}
+
+func stringSliceContains(stringSlice []string, searchString string) bool {
+	for _, s := range stringSlice {
+		if strings.Contains(s, searchString) || strings.Contains(searchString, s) {
+			return true
+		}
+	}
+	return false
 }

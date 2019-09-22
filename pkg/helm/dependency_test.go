@@ -26,13 +26,32 @@ func newRequirements() *chartutil.Requirements {
 	}
 }
 
+func ensureEmptyFileExists(pathParts ...string) error {
+	filepath := path.Join(pathParts...)
+	if f, err := os.Create(filepath); err != nil {
+		if os.IsExist(err) {
+			return f.Truncate(0)
+		}
+		return err
+	}
+	return nil
+}
+
 func TestWriteRequirements(t *testing.T) {
 	dir, err := os.Getwd()
 	require.NoError(t, err, "there must be no error getting the current path")
 	chartPath := path.Join(dir, "fixtures")
-	_, err = os.Create(path.Join(chartPath, requirementsName))
-	require.NoError(t, err, "there must be no error creating the requirements.yaml")
+	require.NoError(t, ensureEmptyFileExists(chartPath, requirementsName), "there must be no error creating the requirements.yaml")
 
-	err = writeRequirements(chartPath, newRequirements())
+	err = writeRequirements(chartPath, newRequirements(), 4)
 	assert.NoError(t, err, "there should be no error writing the chart requirements")
+}
+
+func TestIncrementChartVersion(t *testing.T) {
+	dir, err := os.Getwd()
+	require.NoError(t, err, "there must be no error getting the current path")
+	chartPath := path.Join(dir, "fixtures")
+
+	err = IncrementChartVersion(chartPath)
+	assert.NoError(t, err, "there should be no error incrementing the chart version and writing the new Chart.yaml")
 }

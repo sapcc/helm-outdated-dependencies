@@ -22,16 +22,18 @@ type (
 	listCmd struct {
 		maxColumnWidth uint
 		chartPath      string
+		repositories []string
 		helmSettings   *helm_env.EnvSettings
 	}
 )
 
 func newListOutdatedDependenciesCmd() *cobra.Command {
 	l := &listCmd{
-		maxColumnWidth: 60,
 		helmSettings: &helm_env.EnvSettings{
 			Home: helm.GetHelmHome(),
 		},
+		maxColumnWidth: 60,
+		repositories: []string{},
 	}
 
 	cmd := &cobra.Command{
@@ -49,15 +51,26 @@ func newListOutdatedDependenciesCmd() *cobra.Command {
 				return err
 			}
 			l.chartPath = path
+
+			if maxColumnWidth, err := cmd.Flags().GetUint("max-column-width"); err == nil {
+				l.maxColumnWidth = maxColumnWidth
+			}
+
+			if repositories, err := cmd.Flags().GetStringSlice("repositories"); err == nil {
+				l.repositories = repositories
+			}
+
 			return l.list()
 		},
 	}
+
+	addCommonFlags(cmd)
 
 	return cmd
 }
 
 func (l *listCmd) list() error {
-	outdatedDeps, err := helm.ListOutdatedDependencies(l.chartPath, l.helmSettings)
+	outdatedDeps, err := helm.ListOutdatedDependencies(l.chartPath, l.helmSettings, l.repositories)
 	if err != nil {
 		return err
 	}
