@@ -22,7 +22,7 @@ type (
 	listCmd struct {
 		maxColumnWidth uint
 		chartPath      string
-		repositories []string
+		repositories   []string
 		helmSettings   *helm_env.EnvSettings
 	}
 )
@@ -33,7 +33,7 @@ func newListOutdatedDependenciesCmd() *cobra.Command {
 			Home: helm.GetHelmHome(),
 		},
 		maxColumnWidth: 60,
-		repositories: []string{},
+		repositories:   []string{},
 	}
 
 	cmd := &cobra.Command{

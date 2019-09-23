@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/Masterminds/semver"
 	yamlv3 "gopkg.in/yaml.v3"
@@ -66,6 +66,10 @@ func ListOutdatedDependencies(chartPath string, helmSettings *helm_env.EnvSettin
 	// Consider only dependencies in the given repositories.
 	chartDeps = filterDependencies(chartDeps, repositoryFilter)
 
+	if err = parallelRepoUpdate(chartDeps, helmSettings); err != nil {
+		return nil, err
+	}
+
 	var res []*Result
 	for _, dep := range chartDeps.Dependencies {
 		depVersion, err := semver.NewVersion(dep.Version)
@@ -74,7 +78,7 @@ func ListOutdatedDependencies(chartPath string, helmSettings *helm_env.EnvSettin
 			continue
 		}
 
-		latestVersion, err := FindLatestVersionOfDependency(dep, helmSettings)
+		latestVersion, err := findLatestVersionOfDependency(dep, helmSettings)
 		if err != nil {
 			fmt.Printf("Error getting latest version of %s: %s\n", dep.Name, err.Error())
 			continue
@@ -114,39 +118,6 @@ func UpdateDependencies(chartPath string, reqsToUpdate []*Result, indent int) er
 	return writeRequirements(chartPath, reqs, indent)
 }
 
-// FindLatestVersionOfDependency returns the latest version of the given dependency in the repository.
-func FindLatestVersionOfDependency(dep *chartutil.Dependency, helmSettings *helm_env.EnvSettings) (*semver.Version, error) {
-	// Download and write the index file to a temporary location
-	tempIndexFile, err := ioutil.TempFile("", "tmp-repo-file")
-	if err != nil {
-		return nil, fmt.Errorf("cannot write index file for repository requested")
-	}
-	defer os.Remove(tempIndexFile.Name())
-
-	c := repo.Entry{URL: dep.Repository}
-	r, err := repo.NewChartRepository(&c, getter.All(*helmSettings))
-	if err != nil {
-		return nil, err
-	}
-	if err := r.DownloadIndexFile(tempIndexFile.Name()); err != nil {
-		return nil, fmt.Errorf("can't reach repository %s: %s", dep.Repository, err.Error())
-	}
-
-	// Read the index file for the repository to get chart information and return chart URL
-	repoIndex, err := repo.LoadIndexFile(tempIndexFile.Name())
-	if err != nil {
-		return nil, err
-	}
-
-	// With no version given the highest one is returned.
-	cv, err := repoIndex.Get(dep.Name, "")
-	if err != nil {
-		return nil, err
-	}
-
-	return semver.NewVersion(cv.Version)
-}
-
 // IncrementChart version increments the patch version of the Chart.
 func IncrementChartVersion(chartPath string) error {
 	c, err := chartutil.Load(chartPath)
@@ -162,6 +133,23 @@ func IncrementChartVersion(chartPath string) error {
 	v := chartVersion.IncPatch()
 	c.Metadata.Version = v.String()
 	return writeChartMetadata(chartPath, c.Metadata)
+}
+
+// findLatestVersionOfDependency returns the latest version of the given dependency in the repository.
+func findLatestVersionOfDependency(dep *chartutil.Dependency, helmSettings *helm_env.EnvSettings) (*semver.Version, error) {
+	// Read the index file for the repository to get chart information and return chart URL
+	repoIndex, err := repo.LoadIndexFile(helmSettings.Home.CacheIndex(normalizeRepoName(dep.Repository)))
+	if err != nil {
+		return nil, err
+	}
+
+	// With no version given the highest one is returned.
+	cv, err := repoIndex.Get(dep.Name, "")
+	if err != nil {
+		return nil, err
+	}
+
+	return semver.NewVersion(cv.Version)
 }
 
 func writeChartMetadata(chartPath string, c *chart.Metadata) error {
@@ -256,6 +244,40 @@ func filterDependencies(reqs *chartutil.Requirements, repositoryFilter []string)
 	return reqs
 }
 
+func parallelRepoUpdate(chartDeps *chartutil.Requirements, helmSettings *helm_env.EnvSettings) error {
+	var repos []string
+	for _, dep := range chartDeps.Dependencies {
+		if !stringSliceContains(repos, dep.Repository) {
+			repos = append(repos, dep.Repository)
+		}
+	}
+
+	var wg sync.WaitGroup
+	for _, c := range repos {
+		tmpRepo := &repo.Entry{
+			Name: normalizeRepoName(c),
+			URL:  c,
+		}
+
+		r, err := repo.NewChartRepository(tmpRepo, getter.All(*helmSettings))
+		if err != nil {
+			return err
+		}
+
+		wg.Add(1)
+		go func(r *repo.ChartRepository) {
+			if err := r.DownloadIndexFile(helmSettings.Home.CacheIndex(tmpRepo.Name)); err != nil {
+				fmt.Printf("unable to get an update from the %q chart repository (%s):\n\t%s\n", r.Config.Name, r.Config.URL, err)
+			} else {
+				fmt.Printf("successfully got an update from the %q chart repository\n", r.Config.URL)
+			}
+			wg.Done()
+		}(r)
+	}
+	wg.Wait()
+	return nil
+}
+
 func stringSliceContains(stringSlice []string, searchString string) bool {
 	for _, s := range stringSlice {
 		if strings.Contains(s, searchString) || strings.Contains(searchString, s) {
@@ -263,4 +285,11 @@ func stringSliceContains(stringSlice []string, searchString string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeRepoName(repoURL string) string {
+	name := strings.TrimLeft(repoURL, "https://")
+	name = strings.TrimSuffix(name, "/")
+	name = strings.ReplaceAll(name, "/", "-")
+	return strings.ReplaceAll(name, ".", "-")
 }

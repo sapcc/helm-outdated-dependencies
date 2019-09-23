@@ -13,13 +13,13 @@ func newRequirements() *chartutil.Requirements {
 	return &chartutil.Requirements{
 		Dependencies: []*chartutil.Dependency{
 			{
-				Name: "testdependency",
-				Version: "v0.0.1",
+				Name:       "testdependency",
+				Version:    "v0.0.1",
 				Repository: "https://repo.evil.corp",
 			},
 			{
-				Name: "testdepdendency1",
-				Version: "v0.0.2",
+				Name:       "testdepdendency1",
+				Version:    "v0.0.2",
 				Repository: "https://repo.evil.corp",
 			},
 		},

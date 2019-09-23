@@ -2,11 +2,12 @@ package cmd
 
 import (
 	"fmt"
+	"path/filepath"
+
 	"github.com/gosuri/uitable"
 	"github.com/sapcc/helm-outdated-dependencies/pkg/helm"
 	"github.com/spf13/cobra"
 	helm_env "k8s.io/helm/pkg/helm/environment"
-	"path/filepath"
 )
 
 type (
@@ -16,7 +17,7 @@ type (
 		maxColumnWidth          uint
 		indent                  int
 		isIncrementChartVersion bool
-		repositories []string
+		repositories            []string
 	}
 )
 
@@ -34,7 +35,7 @@ func newUpdateOutdatedDependenciesCmd() *cobra.Command {
 			Home: helm.GetHelmHome(),
 		},
 		maxColumnWidth: 60,
-		repositories: []string{},
+		repositories:   []string{},
 	}
 
 	cmd := &cobra.Command{
