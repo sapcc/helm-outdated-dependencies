@@ -6,7 +6,7 @@ Helm plugin to list and update outdated dependencies of a Helm chart.
 ## Install
 
 ```
-helm plugin install https://github.com/sapcc/helm-outdated-dependencies
+helm plugin install https://github.com/sapcc/helm-outdated-dependencies --version=master
 ```
 
 ## Usage
