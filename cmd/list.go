@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/pkg/errors"
 	"path/filepath"
 
 	"github.com/gosuri/uitable"
@@ -24,6 +25,7 @@ type (
 		chartPath      string
 		repositories   []string
 		helmSettings   *helm_env.EnvSettings
+		failOnOutdatedDependencies bool
 	}
 )
 
@@ -65,6 +67,7 @@ func newListOutdatedDependenciesCmd() *cobra.Command {
 	}
 
 	addCommonFlags(cmd)
+	cmd.Flags().BoolVarP(&l.failOnOutdatedDependencies, "fail-on-outdated-dependencies", "", false, "Fail if any dependency is outdated. (exit code 1)")
 
 	return cmd
 }
@@ -76,6 +79,11 @@ func (l *listCmd) list() error {
 	}
 
 	fmt.Println(l.formatResults(outdatedDeps))
+
+	if l.failOnOutdatedDependencies && len(outdatedDeps) > 0 {
+		return errors.New("dependencies are outdated")
+	}
+
 	return nil
 }
 
