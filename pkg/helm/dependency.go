@@ -49,7 +49,20 @@ func LoadDependencies(chartPath string) (*chartutil.Requirements, error) {
 		return nil, err
 	}
 
-	return chartutil.LoadRequirements(c)
+	reqs, err := chartutil.LoadRequirements(c)
+	if err != nil {
+		return nil, err
+	}
+
+	// Ignore local dependencies referenced by file://.. as they there's always just a single version available.
+	var deps []*chartutil.Dependency
+	for _, d := range reqs.Dependencies {
+		if !strings.HasPrefix(d.Repository, "file://") {
+			deps = append(deps, d)
+		}
+	}
+	reqs.Dependencies = deps
+	return reqs, nil
 }
 
 // ListOutdatedDependencies returns a list of outdated dependencies of the given chart.
@@ -64,7 +77,7 @@ func ListOutdatedDependencies(chartPath string, helmSettings *helm_env.EnvSettin
 	}
 
 	// Consider only dependencies in the given repositories.
-	chartDeps = filterDependencies(chartDeps, repositoryFilter)
+	chartDeps = filterDependenciesByRepository(chartDeps, repositoryFilter)
 
 	if err = parallelRepoUpdate(chartDeps, helmSettings); err != nil {
 		return nil, err
@@ -229,7 +242,7 @@ func getChartVersion(c *chart.Chart) (*semver.Version, error) {
 	return semver.NewVersion(v)
 }
 
-func filterDependencies(reqs *chartutil.Requirements, repositoryFilter []string) *chartutil.Requirements {
+func filterDependenciesByRepository(reqs *chartutil.Requirements, repositoryFilter []string) *chartutil.Requirements {
 	var filteredDeps []*chartutil.Dependency
 	if repositoryFilter != nil && len(repositoryFilter) > 0 {
 		for _, dep := range reqs.Dependencies {
