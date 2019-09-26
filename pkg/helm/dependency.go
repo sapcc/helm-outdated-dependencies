@@ -71,7 +71,7 @@ func ListOutdatedDependencies(chartPath string, helmSettings *helm_env.EnvSettin
 	if err != nil {
 		if err == chartutil.ErrRequirementsNotFound {
 			fmt.Printf("Chart %v has no requirements.\n", chartPath)
-			return nil, err
+			return nil, nil
 		}
 		return nil, err
 	}
