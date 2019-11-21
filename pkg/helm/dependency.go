@@ -1,3 +1,22 @@
+/*******************************************************************************
+*
+* Copyright 2019 SAP SE
+*
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You should have received a copy of the License along with this
+* program. If not, you may obtain a copy of the License at
+*
+*     http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing, software
+* distributed under the License is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+* See the License for the specific language governing permissions and
+* limitations under the License.
+*
+*******************************************************************************/
+
 package helm
 
 import (
@@ -5,9 +24,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -23,6 +44,7 @@ import (
 
 const (
 	requirementsName  = "requirements.yaml"
+	requirementsLock  = "requirements.lock"
 	chartMetadataName = "Chart.yaml"
 )
 
@@ -31,6 +53,20 @@ type Result struct {
 	*chartutil.Dependency
 
 	LatestVersion *semver.Version
+}
+
+// IncType is one of IncTypes.
+type IncType string
+
+// IncTypes ...
+var IncTypes = struct{
+	Major IncType
+	Minor IncType
+	Patch IncType
+}{
+	"major",
+	"minor",
+	"patch",
 }
 
 // GetHelmHome returns the HELM_HOME path.
@@ -105,7 +141,7 @@ func ListOutdatedDependencies(chartPath string, helmSettings *helm_env.EnvSettin
 		}
 	}
 
-	return res, nil
+	return sortResultsAlphabetically(res), nil
 }
 
 // UpdateDependencies updates the dependencies of the given chart.
@@ -128,11 +164,17 @@ func UpdateDependencies(chartPath string, reqsToUpdate []*Result, indent int) er
 		}
 	}
 
-	return writeRequirements(chartPath, reqs, indent)
+	reqs = sortRequirementsAlphabetically(reqs)
+
+	if err := writeRequirements(chartPath, reqs, indent); err != nil {
+		return err
+	}
+
+	return writeRequirementsLock(chartPath, indent)
 }
 
 // IncrementChart version increments the patch version of the Chart.
-func IncrementChartVersion(chartPath string) error {
+func IncrementChartVersion(chartPath string, incType IncType) error {
 	c, err := chartutil.Load(chartPath)
 	if err != nil {
 		return err
@@ -143,8 +185,17 @@ func IncrementChartVersion(chartPath string) error {
 		return err
 	}
 
-	v := chartVersion.IncPatch()
-	c.Metadata.Version = v.String()
+	var newVersion semver.Version
+	switch incType {
+	case IncTypes.Major:
+		newVersion = chartVersion.IncMajor()
+	case IncTypes.Minor:
+		newVersion = chartVersion.IncMinor()
+	default:
+		newVersion = chartVersion.IncPatch()
+	}
+
+	c.Metadata.Version = newVersion.String()
 	return writeChartMetadata(chartPath, c.Metadata)
 }
 
@@ -186,6 +237,13 @@ func writeChartMetadata(chartPath string, c *chart.Metadata) error {
 	return err
 }
 
+func sortRequirementsAlphabetically(reqs *chartutil.Requirements) *chartutil.Requirements {
+	sort.Slice(reqs.Dependencies, func(i, j int) bool {
+		return reqs.Dependencies[i].Name < reqs.Dependencies[j].Name
+	})
+	return reqs
+}
+
 func writeRequirements(chartPath string, reqs *chartutil.Requirements, indent int) error {
 	data, err := toYamlWithIndent(reqs, indent)
 	if err != nil {
@@ -203,8 +261,32 @@ func writeRequirements(chartPath string, reqs *chartutil.Requirements, indent in
 	}
 	defer f.Close()
 
-	_, err = f.WriteAt(data, 0)
+	if err :=f.Truncate(0); err != nil {
+		return err
+	}
+
+	_, err = f.Write(data)
 	return err
+}
+
+func writeRequirementsLock(chartPath string, indent int) error {
+	c, err := chartutil.Load(chartPath)
+	if err != nil {
+		return err
+	}
+
+	newLock, err := chartutil.LoadRequirementsLock(c)
+	if err != nil {
+		return err
+	}
+
+	data, err := toYamlWithIndent(newLock, indent)
+	if err != nil {
+		return err
+	}
+
+	dest := filepath.Join(chartPath, requirementsLock)
+	return ioutil.WriteFile(dest, data, 0644)
 }
 
 func toYamlWithIndent(in interface{}, indent int) ([]byte, error) {
@@ -305,4 +387,11 @@ func normalizeRepoName(repoURL string) string {
 	name = strings.TrimSuffix(name, "/")
 	name = strings.ReplaceAll(name, "/", "-")
 	return strings.ReplaceAll(name, ".", "-")
+}
+
+func sortResultsAlphabetically(res []*Result) []*Result {
+	sort.Slice(res, func(i, j int) bool {
+		return res[i].Name < res[j].Name
+	})
+	return res
 }
