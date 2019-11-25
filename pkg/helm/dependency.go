@@ -46,6 +46,7 @@ const (
 	requirementsName  = "requirements.yaml"
 	requirementsLock  = "requirements.lock"
 	chartMetadataName = "Chart.yaml"
+	filePrefix        = "file://"
 )
 
 // Result ...
@@ -59,7 +60,7 @@ type Result struct {
 type IncType string
 
 // IncTypes ...
-var IncTypes = struct{
+var IncTypes = struct {
 	Major IncType
 	Minor IncType
 	Patch IncType
@@ -90,12 +91,12 @@ func LoadDependencies(chartPath string) (*chartutil.Requirements, error) {
 		return nil, err
 	}
 
-	// Ignore local dependencies referenced by file://.. as they there's always just a single version available.
 	var deps []*chartutil.Dependency
 	for _, d := range reqs.Dependencies {
-		if !strings.HasPrefix(d.Repository, "file://") {
-			deps = append(deps, d)
+		if strings.Contains(d.Repository, filePrefix) {
+			d.Repository = fmt.Sprintf("%s%s", filePrefix, filepath.Join(chartPath, strings.TrimPrefix(d.Repository, filePrefix)))
 		}
+		deps = append(deps, d)
 	}
 	reqs.Dependencies = deps
 	return reqs, nil
@@ -201,6 +202,15 @@ func IncrementChartVersion(chartPath string, incType IncType) error {
 
 // findLatestVersionOfDependency returns the latest version of the given dependency in the repository.
 func findLatestVersionOfDependency(dep *chartutil.Dependency, helmSettings *helm_env.EnvSettings) (*semver.Version, error) {
+	// Handle local dependencies.
+	if strings.Contains(dep.Repository, filePrefix) {
+		c, err := chartutil.Load(strings.TrimPrefix(dep.Repository, filePrefix))
+		if err != nil {
+			return nil, err
+		}
+		return semver.NewVersion(c.Metadata.Version)
+	}
+
 	// Read the index file for the repository to get chart information and return chart URL
 	repoIndex, err := repo.LoadIndexFile(helmSettings.Home.CacheIndex(normalizeRepoName(dep.Repository)))
 	if err != nil {
@@ -261,7 +271,7 @@ func writeRequirements(chartPath string, reqs *chartutil.Requirements, indent in
 	}
 	defer f.Close()
 
-	if err :=f.Truncate(0); err != nil {
+	if err := f.Truncate(0); err != nil {
 		return err
 	}
 
@@ -342,7 +352,7 @@ func filterDependenciesByRepository(reqs *chartutil.Requirements, repositoryFilt
 func parallelRepoUpdate(chartDeps *chartutil.Requirements, helmSettings *helm_env.EnvSettings) error {
 	var repos []string
 	for _, dep := range chartDeps.Dependencies {
-		if !stringSliceContains(repos, dep.Repository) {
+		if !stringSliceContains(repos, dep.Repository) && !strings.Contains(dep.Repository, filePrefix) {
 			repos = append(repos, dep.Repository)
 		}
 	}
@@ -383,7 +393,7 @@ func stringSliceContains(stringSlice []string, searchString string) bool {
 }
 
 func normalizeRepoName(repoURL string) string {
-	name := strings.TrimLeft(repoURL, "https://")
+	name := strings.TrimPrefix(repoURL, "https://")
 	name = strings.TrimSuffix(name, "/")
 	name = strings.ReplaceAll(name, "/", "-")
 	return strings.ReplaceAll(name, ".", "-")
