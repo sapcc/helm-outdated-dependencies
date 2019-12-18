@@ -22,30 +22,37 @@ package cmd
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/gosuri/uitable"
+	"github.com/sapcc/helm-outdated-dependencies/pkg/git"
 	"github.com/sapcc/helm-outdated-dependencies/pkg/helm"
 	"github.com/spf13/cobra"
 	helm_env "k8s.io/helm/pkg/helm/environment"
 )
 
-type (
-	updateCmd struct {
-		chartPath               string
-		helmSettings            *helm_env.EnvSettings
-		maxColumnWidth          uint
-		indent                  int
-		isIncrementChartVersion bool
-		repositories            []string
-	}
-)
+type updateCmd struct {
+	chartPath               string
+	helmSettings            *helm_env.EnvSettings
+	maxColumnWidth          uint
+	indent                  int
+	isIncrementChartVersion bool
+	dependencyFilter        *helm.Filter
+
+	// **Experimental**
+	// isAutoUpdate updates the dependencies, increments version of the chart with the dependency and (git) commits the changes.
+	isAutoUpdate bool
+}
 
 var updateLongUsage = `
-Helm plugin to manage outdated dependencies of a Helm chart.
+Update outdated dependencies of a given chart to their latest version.
 
 Examples:
-  $ helm outdated-dependencies update 
+  # Update dependencies of the given chart.
   $ helm outdated-dependencies update <chartPath>
+
+	# Only update specific dependencies of the given chart.
+	$ helm outdated-dependencies update <chartPath> --dependencies kube-state-metrics,prometheus-operator
 `
 
 func newUpdateOutdatedDependenciesCmd() *cobra.Command {
@@ -53,13 +60,13 @@ func newUpdateOutdatedDependenciesCmd() *cobra.Command {
 		helmSettings: &helm_env.EnvSettings{
 			Home: helm.GetHelmHome(),
 		},
-		maxColumnWidth: 60,
-		repositories:   []string{},
+		dependencyFilter: &helm.Filter{},
+		maxColumnWidth:   60,
 	}
 
 	cmd := &cobra.Command{
 		Use:          "update",
-		Long:         listLongUsage,
+		Long:         updateLongUsage,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if maxColumnWidth, err := cmd.Flags().GetUint("max-column-width"); err == nil {
@@ -67,7 +74,11 @@ func newUpdateOutdatedDependenciesCmd() *cobra.Command {
 			}
 
 			if repositories, err := cmd.Flags().GetStringSlice("repositories"); err == nil {
-				u.repositories = repositories
+				u.dependencyFilter.Repositories = repositories
+			}
+
+			if deps, err := cmd.Flags().GetStringSlice("dependencies"); err == nil {
+				u.dependencyFilter.DependencyNames = deps
 			}
 
 			path := "."
@@ -87,12 +98,13 @@ func newUpdateOutdatedDependenciesCmd() *cobra.Command {
 	addCommonFlags(cmd)
 	cmd.Flags().BoolVarP(&u.isIncrementChartVersion, "increment-chart-version", "", false, "Increment the version of the Helm chart if requirements are updated.")
 	cmd.Flags().IntVarP(&u.indent, "indent", "", 4, "Indent to use when writing the requirements.yaml .")
+	cmd.Flags().BoolVar(&u.isAutoUpdate, "auto-update", false, "**Experimental** Update dependencies of the given chart, commit and push to upstream using git.")
 
 	return cmd
 }
 
 func (u *updateCmd) update() error {
-	outdatedDeps, err := helm.ListOutdatedDependencies(u.chartPath, u.helmSettings, u.repositories)
+	outdatedDeps, err := helm.ListOutdatedDependencies(u.chartPath, u.helmSettings, u.dependencyFilter)
 	if err != nil {
 		return err
 	}
@@ -104,13 +116,52 @@ func (u *updateCmd) update() error {
 
 	fmt.Println(u.formatResults(outdatedDeps))
 
-	if u.isIncrementChartVersion {
+	if u.isIncrementChartVersion || u.isAutoUpdate {
 		if err = helm.IncrementChartVersion(u.chartPath, helm.IncTypes.Patch); err != nil {
 			return err
 		}
 	}
 
-	return helm.UpdateDependencies(u.chartPath, outdatedDeps, u.indent)
+	if err := helm.UpdateDependencies(u.chartPath, outdatedDeps, u.indent); err != nil {
+		return err
+	}
+
+	// Return here if the auto update is not enabled.
+	if !u.isAutoUpdate {
+		return nil
+	}
+
+	git, err := git.New(u.chartPath)
+	if err != nil {
+		return err
+	}
+
+	res, err := git.Diff()
+	if err != nil {
+		return err
+	}
+	fmt.Println(res)
+
+	depNames := make([]string, len(outdatedDeps))
+	for idx, dep := range outdatedDeps {
+		depNames[idx] = fmt.Sprintf("%s@%s", dep.Name, dep.Version)
+	}
+
+	chartName, err := helm.GetChartName(u.chartPath)
+	if err != nil {
+		return err
+	}
+
+	msg := fmt.Sprintf("[%s] updated dependency to %s", chartName, strings.Join(depNames, ", "))
+	res, err = git.Commit(msg)
+	if err != nil {
+		return err
+	}
+	fmt.Println(res)
+
+	res, err = git.RebaseAndPushToMaster()
+	fmt.Println(res)
+	return err
 }
 
 func (u *updateCmd) formatResults(results []*helm.Result) string {

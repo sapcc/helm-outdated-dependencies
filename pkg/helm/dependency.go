@@ -20,25 +20,16 @@
 package helm
 
 import (
-	"bytes"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io/ioutil"
-	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/Masterminds/semver"
-	yamlv3 "gopkg.in/yaml.v3"
 	"k8s.io/helm/pkg/chartutil"
 	"k8s.io/helm/pkg/getter"
 	helm_env "k8s.io/helm/pkg/helm/environment"
-	"k8s.io/helm/pkg/helm/helmpath"
-	"k8s.io/helm/pkg/proto/hapi/chart"
 	"k8s.io/helm/pkg/repo"
 )
 
@@ -48,13 +39,6 @@ const (
 	chartMetadataName = "Chart.yaml"
 	filePrefix        = "file://"
 )
-
-// Result ...
-type Result struct {
-	*chartutil.Dependency
-
-	LatestVersion *semver.Version
-}
 
 // IncType is one of IncTypes.
 type IncType string
@@ -70,41 +54,9 @@ var IncTypes = struct {
 	"patch",
 }
 
-// GetHelmHome returns the HELM_HOME path.
-func GetHelmHome() helmpath.Home {
-	home := helm_env.DefaultHelmHome
-	if h := os.Getenv("HELM_HOME"); h != "" {
-		home = h
-	}
-	return helmpath.Home(home)
-}
-
-// LoadDependencies loads the dependencies of the given chart.
-func LoadDependencies(chartPath string) (*chartutil.Requirements, error) {
-	c, err := chartutil.Load(chartPath)
-	if err != nil {
-		return nil, err
-	}
-
-	reqs, err := chartutil.LoadRequirements(c)
-	if err != nil {
-		return nil, err
-	}
-
-	var deps []*chartutil.Dependency
-	for _, d := range reqs.Dependencies {
-		if strings.Contains(d.Repository, filePrefix) {
-			d.Repository = fmt.Sprintf("%s%s", filePrefix, filepath.Join(chartPath, strings.TrimPrefix(d.Repository, filePrefix)))
-		}
-		deps = append(deps, d)
-	}
-	reqs.Dependencies = deps
-	return reqs, nil
-}
-
 // ListOutdatedDependencies returns a list of outdated dependencies of the given chart.
-func ListOutdatedDependencies(chartPath string, helmSettings *helm_env.EnvSettings, repositoryFilter []string) ([]*Result, error) {
-	chartDeps, err := LoadDependencies(chartPath)
+func ListOutdatedDependencies(chartPath string, helmSettings *helm_env.EnvSettings, dependencyFilter *Filter) ([]*Result, error) {
+	chartDeps, err := loadDependencies(chartPath, dependencyFilter)
 	if err != nil {
 		if err == chartutil.ErrRequirementsNotFound {
 			fmt.Printf("Chart %v has no requirements.\n", chartPath)
@@ -112,9 +64,6 @@ func ListOutdatedDependencies(chartPath string, helmSettings *helm_env.EnvSettin
 		}
 		return nil, err
 	}
-
-	// Consider only dependencies in the given repositories.
-	chartDeps = filterDependenciesByRepository(chartDeps, repositoryFilter)
 
 	if err = parallelRepoUpdate(chartDeps, helmSettings); err != nil {
 		return nil, err
@@ -166,7 +115,6 @@ func UpdateDependencies(chartPath string, reqsToUpdate []*Result, indent int) er
 	}
 
 	reqs = sortRequirementsAlphabetically(reqs)
-
 	if err := writeRequirements(chartPath, reqs, indent); err != nil {
 		return err
 	}
@@ -200,6 +148,40 @@ func IncrementChartVersion(chartPath string, incType IncType) error {
 	return writeChartMetadata(chartPath, c.Metadata)
 }
 
+// GetChartName returns the name of the chart in the given path or an error.
+func GetChartName(chartPath string) (string, error) {
+	c, err := chartutil.Load(chartPath)
+	if err != nil {
+		return "", err
+	}
+
+	return c.GetMetadata().GetName(), nil
+}
+
+// loadDependencies loads the dependencies of the given chart.
+func loadDependencies(chartPath string, f *Filter) (*chartutil.Requirements, error) {
+	c, err := chartutil.Load(chartPath)
+	if err != nil {
+		return nil, err
+	}
+
+	reqs, err := chartutil.LoadRequirements(c)
+	if err != nil {
+		return nil, err
+	}
+
+	var deps []*chartutil.Dependency
+	for _, d := range reqs.Dependencies {
+		if strings.Contains(d.Repository, filePrefix) {
+			d.Repository = fmt.Sprintf("%s%s", filePrefix, filepath.Join(chartPath, strings.TrimPrefix(d.Repository, filePrefix)))
+		}
+		deps = append(deps, d)
+	}
+
+	reqs.Dependencies = f.FilterDependencies(deps)
+	return reqs, nil
+}
+
 // findLatestVersionOfDependency returns the latest version of the given dependency in the repository.
 func findLatestVersionOfDependency(dep *chartutil.Dependency, helmSettings *helm_env.EnvSettings) (*semver.Version, error) {
 	// Handle local dependencies.
@@ -226,126 +208,10 @@ func findLatestVersionOfDependency(dep *chartutil.Dependency, helmSettings *helm
 	return semver.NewVersion(cv.Version)
 }
 
-func writeChartMetadata(chartPath string, c *chart.Metadata) error {
-	data, err := toYamlWithIndent(c, 0)
-	if err != nil {
-		return err
-	}
-
-	absPath, err := filepath.Abs(path.Join(chartPath, chartMetadataName))
-	if err != nil {
-		return err
-	}
-
-	f, err := os.OpenFile(absPath, os.O_RDWR, 0644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	_, err = f.WriteAt(data, 0)
-	return err
-}
-
 func sortRequirementsAlphabetically(reqs *chartutil.Requirements) *chartutil.Requirements {
 	sort.Slice(reqs.Dependencies, func(i, j int) bool {
 		return reqs.Dependencies[i].Name < reqs.Dependencies[j].Name
 	})
-	return reqs
-}
-
-func writeRequirements(chartPath string, reqs *chartutil.Requirements, indent int) error {
-	data, err := toYamlWithIndent(reqs, indent)
-	if err != nil {
-		return err
-	}
-
-	absPath, err := filepath.Abs(path.Join(chartPath, requirementsName))
-	if err != nil {
-		return err
-	}
-
-	f, err := os.OpenFile(absPath, os.O_RDWR, 0644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	if err := f.Truncate(0); err != nil {
-		return err
-	}
-
-	_, err = f.Write(data)
-	return err
-}
-
-func writeRequirementsLock(chartPath string, indent int) error {
-	c, err := chartutil.Load(chartPath)
-	if err != nil {
-		return err
-	}
-
-	newLock, err := chartutil.LoadRequirementsLock(c)
-	if err != nil {
-		return err
-	}
-
-	data, err := toYamlWithIndent(newLock, indent)
-	if err != nil {
-		return err
-	}
-
-	dest := filepath.Join(chartPath, requirementsLock)
-	return ioutil.WriteFile(dest, data, 0644)
-}
-
-func toYamlWithIndent(in interface{}, indent int) ([]byte, error) {
-	// Unfortunately chartutil.Requirements, charts.Chart structs only have the JSON anchors, but not the YAML ones.
-	// So we have to take the JSON detour.
-	jsonData, err := json.Marshal(in)
-	if err != nil {
-		return nil, err
-	}
-
-	var jsonObj interface{}
-	if err := yamlv3.Unmarshal(jsonData, &jsonObj); err != nil {
-		return nil, err
-	}
-
-	var buf bytes.Buffer
-	enc := yamlv3.NewEncoder(&buf)
-	defer enc.Close()
-	enc.SetIndent(indent)
-	err = enc.Encode(jsonObj)
-	return buf.Bytes(), err
-}
-
-func getChartVersion(c *chart.Chart) (*semver.Version, error) {
-	m := c.GetMetadata()
-	if m == nil {
-		return nil, errors.New("chart has no metdata")
-	}
-
-	v := m.GetVersion()
-	if v == "" {
-		return nil, errors.New("chart has no version")
-	}
-
-	return semver.NewVersion(v)
-}
-
-func filterDependenciesByRepository(reqs *chartutil.Requirements, repositoryFilter []string) *chartutil.Requirements {
-	var filteredDeps []*chartutil.Dependency
-	if repositoryFilter != nil && len(repositoryFilter) > 0 {
-		for _, dep := range reqs.Dependencies {
-			if stringSliceContains(repositoryFilter, dep.Repository) {
-				filteredDeps = append(filteredDeps, dep)
-			}
-		}
-	} else {
-		filteredDeps = reqs.Dependencies
-	}
-	reqs.Dependencies = filteredDeps
 	return reqs
 }
 
@@ -381,27 +247,4 @@ func parallelRepoUpdate(chartDeps *chartutil.Requirements, helmSettings *helm_en
 	}
 	wg.Wait()
 	return nil
-}
-
-func stringSliceContains(stringSlice []string, searchString string) bool {
-	for _, s := range stringSlice {
-		if strings.Contains(s, searchString) || strings.Contains(searchString, s) {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeRepoName(repoURL string) string {
-	name := strings.TrimPrefix(repoURL, "https://")
-	name = strings.TrimSuffix(name, "/")
-	name = strings.ReplaceAll(name, "/", "-")
-	return strings.ReplaceAll(name, ".", "-")
-}
-
-func sortResultsAlphabetically(res []*Result) []*Result {
-	sort.Slice(res, func(i, j int) bool {
-		return res[i].Name < res[j].Name
-	})
-	return res
 }

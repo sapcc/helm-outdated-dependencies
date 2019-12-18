@@ -38,23 +38,22 @@ Examples:
   $ helm outdated-dependencies list <chartPath>
 `
 
-type (
-	listCmd struct {
-		maxColumnWidth uint
-		chartPath      string
-		repositories   []string
-		helmSettings   *helm_env.EnvSettings
-		failOnOutdatedDependencies bool
-	}
-)
+type listCmd struct {
+	maxColumnWidth             uint
+	chartPath                  string
+	helmSettings               *helm_env.EnvSettings
+	failOnOutdatedDependencies bool
+
+	dependencyFilter *helm.Filter
+}
 
 func newListOutdatedDependenciesCmd() *cobra.Command {
 	l := &listCmd{
 		helmSettings: &helm_env.EnvSettings{
 			Home: helm.GetHelmHome(),
 		},
-		maxColumnWidth: 60,
-		repositories:   []string{},
+		dependencyFilter: &helm.Filter{},
+		maxColumnWidth:   60,
 	}
 
 	cmd := &cobra.Command{
@@ -78,7 +77,11 @@ func newListOutdatedDependenciesCmd() *cobra.Command {
 			}
 
 			if repositories, err := cmd.Flags().GetStringSlice("repositories"); err == nil {
-				l.repositories = repositories
+				l.dependencyFilter.Repositories = repositories
+			}
+
+			if deps, err := cmd.Flags().GetStringSlice("dependencies"); err == nil {
+				l.dependencyFilter.DependencyNames = deps
 			}
 
 			return l.list()
@@ -92,7 +95,7 @@ func newListOutdatedDependenciesCmd() *cobra.Command {
 }
 
 func (l *listCmd) list() error {
-	outdatedDeps, err := helm.ListOutdatedDependencies(l.chartPath, l.helmSettings, l.repositories)
+	outdatedDeps, err := helm.ListOutdatedDependencies(l.chartPath, l.helmSettings, l.dependencyFilter)
 	if err != nil {
 		return err
 	}
