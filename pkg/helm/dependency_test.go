@@ -71,6 +71,6 @@ func TestIncrementChartVersion(t *testing.T) {
 	require.NoError(t, err, "there must be no error getting the current path")
 	chartPath := path.Join(dir, "fixtures")
 
-	err = IncrementChartVersion(chartPath)
+	err = IncrementChartVersion(chartPath, IncTypes.Patch)
 	assert.NoError(t, err, "there should be no error incrementing the chart version and writing the new Chart.yaml")
 }

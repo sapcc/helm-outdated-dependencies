@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gosuri/uitable"
 	"github.com/sapcc/helm-outdated-dependencies/pkg/git"
@@ -38,10 +39,14 @@ type updateCmd struct {
 	indent                  int
 	isIncrementChartVersion bool
 	dependencyFilter        *helm.Filter
+	git                     *git.Git
+	hub                     *git.Hub
 
 	// **Experimental**
 	// isAutoUpdate updates the dependencies, increments version of the chart with the dependency and (git) commits the changes.
 	isAutoUpdate bool
+	authorName,
+	authorEmail string
 }
 
 var updateLongUsage = `
@@ -91,6 +96,7 @@ func newUpdateOutdatedDependenciesCmd() *cobra.Command {
 				return err
 			}
 			u.chartPath = path
+
 			return u.update()
 		},
 	}
@@ -98,7 +104,10 @@ func newUpdateOutdatedDependenciesCmd() *cobra.Command {
 	addCommonFlags(cmd)
 	cmd.Flags().BoolVarP(&u.isIncrementChartVersion, "increment-chart-version", "", false, "Increment the version of the Helm chart if requirements are updated.")
 	cmd.Flags().IntVarP(&u.indent, "indent", "", 4, "Indent to use when writing the requirements.yaml .")
+
 	cmd.Flags().BoolVar(&u.isAutoUpdate, "auto-update", false, "**Experimental** Update dependencies of the given chart, commit and push to upstream using git.")
+	cmd.Flags().StringVar(&u.authorName, "author-name", "", "The name of the author and committer to be used when auto update is enabled.")
+	cmd.Flags().StringVar(&u.authorEmail, "author-email", "", "The email of the author and committer to be used when auto update is enabled.")
 
 	return cmd
 }
@@ -113,7 +122,6 @@ func (u *updateCmd) update() error {
 		fmt.Println("All charts up-to-date.")
 		return nil
 	}
-
 	fmt.Println(u.formatResults(outdatedDeps))
 
 	if u.isIncrementChartVersion || u.isAutoUpdate {
@@ -122,7 +130,7 @@ func (u *updateCmd) update() error {
 		}
 	}
 
-	if err := helm.UpdateDependencies(u.chartPath, outdatedDeps, u.indent); err != nil {
+	if err := helm.UpdateDependencies(u.chartPath, outdatedDeps, u.indent, u.helmSettings); err != nil {
 		return err
 	}
 
@@ -131,19 +139,13 @@ func (u *updateCmd) update() error {
 		return nil
 	}
 
-	git, err := git.New(u.chartPath)
-	if err != nil {
-		return err
-	}
-
-	res, err := git.Diff()
-	if err != nil {
-		return err
-	}
-	fmt.Println(res)
-
+	// maxIncType is used to keep track of the version changes when updating dependencies.
+	maxIncType := helm.IncTypes.Patch
 	depNames := make([]string, len(outdatedDeps))
 	for idx, dep := range outdatedDeps {
+		if i := helm.GetIncType(dep.CurrentVersion, dep.LatestVersion); maxIncType.IsGreater(i) {
+			maxIncType = i
+		}
 		depNames[idx] = fmt.Sprintf("%s@%s", dep.Name, dep.Version)
 	}
 
@@ -152,14 +154,74 @@ func (u *updateCmd) update() error {
 		return err
 	}
 
-	msg := fmt.Sprintf("[%s] updated dependency to %s", chartName, strings.Join(depNames, ", "))
-	res, err = git.Commit(msg)
+	commitMessage := fmt.Sprintf("[%s] updated dependency to %s", chartName, strings.Join(depNames, ", "))
+	if maxIncType == helm.IncTypes.Major || maxIncType == helm.IncTypes.Minor {
+		return u.upstreamMajorChanges(commitMessage, chartName)
+	}
+
+	return u.upstreamMinorChanges(commitMessage)
+}
+
+func (u *updateCmd) upstreamMinorChanges(commitMessage string) error {
+	g, err := git.NewGit(u.chartPath, u.authorName, u.authorEmail)
+	if err != nil {
+		return err
+	}
+
+	res, err := g.Diff()
 	if err != nil {
 		return err
 	}
 	fmt.Println(res)
 
-	res, err = git.RebaseAndPushToMaster()
+	res, err = g.Commit(commitMessage)
+	if err != nil {
+		return err
+	}
+	fmt.Println(res)
+
+	res, err = g.RebaseAndPushToMaster()
+	fmt.Println(res)
+	return err
+}
+
+func (u *updateCmd) upstreamMajorChanges(commitMessage, chartName string) error {
+	g, err := git.NewGit(u.chartPath, u.authorName, u.authorEmail)
+	if err != nil {
+		return err
+	}
+
+	branchName := fmt.Sprintf("%s-%d", chartName, time.Now().UTC().Unix())
+	res, err := g.CreateAndCheckoutBranch(branchName)
+	if err != nil {
+		return err
+	}
+	defer g.CheckoutBranch("master")
+
+	res, err = g.Diff()
+	if err != nil {
+		return err
+	}
+	fmt.Println(res)
+
+	res, err = g.Commit(commitMessage)
+	if err != nil {
+		return err
+	}
+	fmt.Println(res)
+
+	res, err = g.Push(branchName)
+	if err != nil {
+		return err
+	}
+	fmt.Println(res)
+
+	hub, err := git.NewHub(u.chartPath)
+	if err != nil {
+		return err
+	}
+
+	res, err = hub.OpenPullRequestToMaster(branchName, fmt.Sprintf("[%s] updating dependencies", chartName), commitMessage)
 	fmt.Println(res)
 	return err
 }

@@ -20,65 +20,83 @@
 package git
 
 import (
-	"bytes"
-	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"strings"
+
+	"github.com/pkg/errors"
+	"github.com/sapcc/helm-outdated-dependencies/pkg/cmd"
 )
 
-var (
-	errGitNotInstalled = errors.New("git is not installed")
-	errGitNotRemote    = errors.New("git remote has no remote configured")
-)
+var errGitNoRemote = errors.New("git remote has no remote configured")
 
-// Git ...
+// Git wraps the git command line.
 type Git struct {
-	cmd,
+	*cmd.Command
+
 	branchName,
 	remoteName,
 	authorName,
 	authorEmail string
-	defaultArgs []string
 }
 
-// New returns a new Git or an error.
-func New(path string) (*Git, error) {
-	authorName, ok := os.LookupEnv("HELM_DEPENDENCY_AUTHOR_NAME")
-	if !ok {
-		authorName = "Helm Bot"
-	}
-
-	authorEmail, ok := os.LookupEnv("HELM_DEPENDENCY_AUTHOR_MAIL")
-	if !ok {
-		authorEmail = ""
-	}
-
-	g := &Git{
-		cmd:         "git",
-		branchName:  "master",
-		remoteName:  "origin",
-		authorName:  authorName,
-		authorEmail: authorEmail,
-		defaultArgs: []string{"-C", path},
-	}
-
-	if err := g.verify(); err != nil {
+// NewGit returns a new Git or an error.
+func NewGit(path, authorName, authorEmail string) (*Git, error) {
+	c, err := cmd.New("git", "-C", path)
+	if err != nil {
 		return nil, err
 	}
 
-	return g, g.init()
+	g := &Git{
+		Command:    c,
+		branchName: "master",
+		remoteName: "origin",
+	}
+
+	if _, err := g.GetRemoteURL(); err != nil {
+		return nil, err
+	}
+
+	if authorName == "" {
+		authorName, err = g.GetGlobalUserName()
+		if err != nil {
+			return nil, err
+		}
+	}
+	g.authorName = authorName
+
+	if authorEmail == "" {
+		authorEmail, err = g.GetGlobalUserEmail()
+		if err != nil {
+			return nil, err
+		}
+	}
+	g.authorEmail = authorEmail
+
+	return g, nil
 }
 
 // Commit adds and commits all changes.
 func (g *Git) Commit(message string) (string, error) {
-	return g.run("commit", "--all", "--author", fmt.Sprintf("%s <%s>", g.authorName, g.authorEmail), "--message", message)
+	res, err := g.Run(
+		"-c", fmt.Sprintf(`user.name="%s"`, g.authorName),
+		"-c", fmt.Sprintf(`user.email="%s"`, g.authorEmail),
+		"commit",
+		"--all",
+		"--author", fmt.Sprintf(`"%s <%s>"`, g.authorName, g.authorEmail),
+		"--message", fmt.Sprintf(`"%s"`, message),
+	)
+	if err != nil {
+		return "", errors.Wrap(err, "git commit ... failed")
+	}
+	return res, nil
 }
 
 // Diff shows the changes.
 func (g *Git) Diff() (string, error) {
-	return g.run("diff")
+	res, err := g.Run("diff")
+	if err != nil {
+		return "", errors.Wrap(err, "git diff failed")
+	}
+	return res, nil
 }
 
 // PushToMaster rebases and pushes the commit(s) to upstream.
@@ -87,56 +105,60 @@ func (g *Git) RebaseAndPushToMaster() (string, error) {
 		return out, err
 	}
 
-	return g.run("push", fmt.Sprintf("%s/%s", g.remoteName, g.branchName))
+	return g.Push(g.branchName)
+}
+
+// Push pushes to the given upstream branch.
+func (g *Git) Push(branchName string) (string, error) {
+	res, err := g.Run("push", g.remoteName, branchName)
+	if err != nil {
+		return "", errors.Wrap(err, "git push failed")
+	}
+	return res, nil
 }
 
 // PullRebase pulls and rebases.
 func (g *Git) PullRebase() (string, error) {
-	return g.run("pull", "--rebase")
+	res, err := g.Run("pull", "--rebase")
+	if err != nil {
+		return "", errors.Wrap(err, "git pull failed")
+	}
+	return res, nil
 }
 
-func (g *Git) init() error {
-	if _, err := g.run("config", "user.name", g.authorName); err != nil {
-		return err
+// GetRemoteURL returns the remotes URL or an error.
+func (g *Git) GetRemoteURL() (string, error) {
+	res, err := g.Run("remote", "get-url", g.remoteName)
+	if err != nil {
+		return "", errors.Wrapf(err, "git remote get-url %s failed", g.remoteName)
 	}
-
-	_, err := g.run("config", "user.email", g.authorEmail)
-	return err
+	return res, nil
 }
 
-// verify checks if git is installed and the given repository has a remote configured.
-func (g *Git) verify() error {
-	const (
-		notFound     = "not found"
-		noSuchRemote = "No such remote"
-	)
-
-	res, err := g.run("version")
-	if err != nil && strings.Contains(err.Error(), notFound) || strings.Contains(res, notFound) {
-		return errGitNotInstalled
+// CreateAndCheckoutBranch does what it says.
+func (g *Git) CreateAndCheckoutBranch(branchName string) (string, error) {
+	res, err := g.Run("checkout", "-b", branchName)
+	if err != nil {
+		return "", errors.Wrapf(err, "git checkout -b %s failed", branchName)
 	}
-
-	res, err = g.GetRemoteURL(g.remoteName)
-	if err != nil && strings.Contains(err.Error(), noSuchRemote) || strings.Contains(res, noSuchRemote) {
-		return errGitNotRemote
-	}
-
-	return nil
+	return res, nil
 }
 
-func (g *Git) GetRemoteURL(name string) (string, error) {
-	return g.run("remote", "get-url", name)
+// Checkout branch.
+func (g *Git) CheckoutBranch(branchName string) (string, error) {
+	res, err := g.Run("checkout", branchName)
+	if err != nil {
+		return "", errors.Wrapf(err, "git checkout %s failed", branchName)
+	}
+	return res, nil
 }
 
-func (g *Git) run(args ...string) (string, error) {
-	cmd := exec.Command(g.cmd, append(g.defaultArgs, args...)...)
-	var stdOut bytes.Buffer
-	cmd.Stdout = &stdOut
+// GetGlobalUserName returns user name from gits global config.
+func (g *Git) GetGlobalUserName() (string, error) {
+	return g.Run("config", "--global", "user.name")
+}
 
-	if err := cmd.Start(); err != nil {
-		return "", err
-	}
-
-	err := cmd.Wait()
-	return stdOut.String(), err
+// GetGlobalUserEmail returns user email from gits global config.
+func (g *Git) GetGlobalUserEmail() (string, error) {
+	return g.Run("config", "--global", "user.email")
 }

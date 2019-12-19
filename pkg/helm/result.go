@@ -29,6 +29,8 @@ import (
 // Result ...
 type Result struct {
 	*chartutil.Dependency
+
+	CurrentVersion,
 	LatestVersion *semver.Version
 }
 

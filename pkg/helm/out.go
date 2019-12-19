@@ -22,7 +22,6 @@ package helm
 import (
 	"bytes"
 	"encoding/json"
-	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -77,26 +76,6 @@ func writeRequirements(chartPath string, reqs *chartutil.Requirements, indent in
 
 	_, err = f.Write(data)
 	return err
-}
-
-func writeRequirementsLock(chartPath string, indent int) error {
-	c, err := chartutil.Load(chartPath)
-	if err != nil {
-		return err
-	}
-
-	newLock, err := chartutil.LoadRequirementsLock(c)
-	if err != nil {
-		return err
-	}
-
-	data, err := toYamlWithIndent(newLock, indent)
-	if err != nil {
-		return err
-	}
-
-	dest := filepath.Join(chartPath, requirementsLock)
-	return ioutil.WriteFile(dest, data, 0644)
 }
 
 func writeChartMetadata(chartPath string, c *chart.Metadata) error {

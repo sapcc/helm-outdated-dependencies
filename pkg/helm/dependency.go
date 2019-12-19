@@ -20,7 +20,10 @@
 package helm
 
 import (
+	"bytes"
 	"fmt"
+	"k8s.io/helm/pkg/downloader"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -35,24 +38,9 @@ import (
 
 const (
 	requirementsName  = "requirements.yaml"
-	requirementsLock  = "requirements.lock"
 	chartMetadataName = "Chart.yaml"
 	filePrefix        = "file://"
 )
-
-// IncType is one of IncTypes.
-type IncType string
-
-// IncTypes ...
-var IncTypes = struct {
-	Major IncType
-	Minor IncType
-	Patch IncType
-}{
-	"major",
-	"minor",
-	"patch",
-}
 
 // ListOutdatedDependencies returns a list of outdated dependencies of the given chart.
 func ListOutdatedDependencies(chartPath string, helmSettings *helm_env.EnvSettings, dependencyFilter *Filter) ([]*Result, error) {
@@ -84,9 +72,15 @@ func ListOutdatedDependencies(chartPath string, helmSettings *helm_env.EnvSettin
 		}
 
 		if depVersion.LessThan(latestVersion) {
+			currentVersion, err := semver.NewVersion(dep.Version)
+			if err != nil {
+				continue
+			}
+
 			res = append(res, &Result{
-				Dependency:    dep,
-				LatestVersion: latestVersion,
+				Dependency:     dep,
+				CurrentVersion: currentVersion,
+				LatestVersion:  latestVersion,
 			})
 		}
 	}
@@ -95,7 +89,7 @@ func ListOutdatedDependencies(chartPath string, helmSettings *helm_env.EnvSettin
 }
 
 // UpdateDependencies updates the dependencies of the given chart.
-func UpdateDependencies(chartPath string, reqsToUpdate []*Result, indent int) error {
+func UpdateDependencies(chartPath string, reqsToUpdate []*Result, indent int, helmSettings *helm_env.EnvSettings) error {
 	c, err := chartutil.Load(chartPath)
 	if err != nil {
 		return err
@@ -119,7 +113,26 @@ func UpdateDependencies(chartPath string, reqsToUpdate []*Result, indent int) er
 		return err
 	}
 
-	return writeRequirementsLock(chartPath, indent)
+	return syncRequirementsLock(chartPath, helmSettings)
+}
+
+func syncRequirementsLock(chartPath string, helmSettings *helm_env.EnvSettings) error {
+	var out bytes.Buffer
+
+	dm := downloader.Manager{
+		Out:        &out,
+		ChartPath:  chartPath,
+		HelmHome:   helmSettings.Home,
+		Verify:     downloader.VerifyNever,
+		Debug:      false,
+		Keyring:    os.ExpandEnv("$HOME/.gnupg/pubring.gpg"),
+		SkipUpdate: true, // We already updated while looking up the latest version.
+		Getters:    getter.All(*helmSettings),
+	}
+
+	err := dm.Update()
+	fmt.Println(out.String())
+	return err
 }
 
 // IncrementChart version increments the patch version of the Chart.
