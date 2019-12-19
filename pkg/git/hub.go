@@ -52,8 +52,8 @@ func (h *Hub) OpenPullRequestToMaster(fromBranch, title, description string) (st
 		"--no-edit",
 		"--base", h.baseBranch,
 		"--head", fromBranch,
-		"--message", fmt.Sprintf(`"%s"`, title),
-		"--message", fmt.Sprintf(`"%s"`, description),
+		"--message", fmt.Sprintf(`%s`, title),
+		"--message", fmt.Sprintf(`%s`, description),
 	)
 	if err != nil {
 		return "", errors.Wrap(err, "hub pull-request ... failed")

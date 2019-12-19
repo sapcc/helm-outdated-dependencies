@@ -44,7 +44,8 @@ type updateCmd struct {
 
 	// **Experimental**
 	// isAutoUpdate updates the dependencies, increments version of the chart with the dependency and (git) commits the changes.
-	isAutoUpdate bool
+	isAutoUpdate,
+	isOnlyPullRequest bool
 	authorName,
 	authorEmail string
 }
@@ -105,9 +106,11 @@ func newUpdateOutdatedDependenciesCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&u.isIncrementChartVersion, "increment-chart-version", "", false, "Increment the version of the Helm chart if requirements are updated.")
 	cmd.Flags().IntVarP(&u.indent, "indent", "", 4, "Indent to use when writing the requirements.yaml .")
 
+	// **Experimental** Update dependencies of the given chart, commit and push to upstream using git.
 	cmd.Flags().BoolVar(&u.isAutoUpdate, "auto-update", false, "**Experimental** Update dependencies of the given chart, commit and push to upstream using git.")
 	cmd.Flags().StringVar(&u.authorName, "author-name", "", "The name of the author and committer to be used when auto update is enabled.")
 	cmd.Flags().StringVar(&u.authorEmail, "author-email", "", "The email of the author and committer to be used when auto update is enabled.")
+	cmd.Flags().BoolVar(&u.isOnlyPullRequest, "only-pull-requests", false, "Only use pull requests. Do not commit minor changes to master branch.")
 
 	return cmd
 }
@@ -155,13 +158,16 @@ func (u *updateCmd) update() error {
 	}
 
 	commitMessage := fmt.Sprintf("[%s] updated dependency to %s", chartName, strings.Join(depNames, ", "))
-	if maxIncType == helm.IncTypes.Major || maxIncType == helm.IncTypes.Minor {
+
+	// If potential breaking changes are expected, use a pull request.
+	if (maxIncType == helm.IncTypes.Major || maxIncType == helm.IncTypes.Minor) && !u.isOnlyPullRequest {
 		return u.upstreamMajorChanges(commitMessage, chartName)
 	}
 
 	return u.upstreamMinorChanges(commitMessage)
 }
 
+// upstreamMinorChanges commits the changes to the master branch of the upstream github repository.
 func (u *updateCmd) upstreamMinorChanges(commitMessage string) error {
 	g, err := git.NewGit(u.chartPath, u.authorName, u.authorEmail)
 	if err != nil {
@@ -185,6 +191,7 @@ func (u *updateCmd) upstreamMinorChanges(commitMessage string) error {
 	return err
 }
 
+// upstreamMajorChanges same as upstreamMinorChanges but via github.com pull request.
 func (u *updateCmd) upstreamMajorChanges(commitMessage, chartName string) error {
 	g, err := git.NewGit(u.chartPath, u.authorName, u.authorEmail)
 	if err != nil {
