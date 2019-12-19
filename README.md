@@ -27,6 +27,12 @@ This feature is enabled via the `--auto-update` flag.
 Minor changes are directly committed to the master branch. Major and potentially breaking changes are submitted via pull requests (PR).  
 Using the flag `--only-pull-requests` prevents commits to master and will create a PR instead.
 
+Requirements:  
+[1] Git command line tools.  
+[2] [Hub](https://github.com/github/hub) for the Github API.
+
+Example:
+
 ```bash
 helm outdated-dependencies update <pathToChart> --auto-update --author-name=sapcc-bot --author-email=sapcc-bot@sap.com
 ```
