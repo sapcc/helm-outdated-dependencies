@@ -21,13 +21,17 @@ package git
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/pkg/errors"
 	"github.com/sapcc/helm-outdated-dependencies/pkg/cmd"
 )
 
-var errGitNoRemote = errors.New("git remote has no remote configured")
+var (
+	errGitNoRemote = errors.New("git remote has no remote configured")
+	errGithubNoToken = errors.New("GITHUB_TOKEN environment variable no set")
+)
 
 // Git wraps the git command line.
 type Git struct {
@@ -175,9 +179,14 @@ func (g *Git) getPushURL() (string, error) {
 		return "", err
 	}
 
+	ghToken, ok := os.LookupEnv("GITHUB_TOKEN")
+	if !ok {
+		return "", errGithubNoToken
+	}
+
 	remote = strings.TrimPrefix(remote, "https://")
 	remote = strings.TrimPrefix(remote, "git@")
 	remote = strings.ReplaceAll(remote, ":", "/")
 
-	return fmt.Sprintf("https://%s:$GITHUB_TOKEN@%s", g.authorName, remote), nil
+	return fmt.Sprintf("https://%s:%s@%s", g.authorName, ghToken, remote), nil
 }
