@@ -21,6 +21,7 @@ package git
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/pkg/errors"
 	"github.com/sapcc/helm-outdated-dependencies/pkg/cmd"
@@ -110,7 +111,12 @@ func (g *Git) RebaseAndPushToMaster() (string, error) {
 
 // Push pushes to the given upstream branch.
 func (g *Git) Push(branchName string) (string, error) {
-	res, err := g.Run("push", g.remoteName, branchName)
+	tmpPushURL, err := g.getPushURL()
+	if err != nil {
+		return "", err
+	}
+
+	res, err := g.Run("push", tmpPushURL, branchName)
 	if err != nil {
 		return "", errors.Wrap(err, "git push failed")
 	}
@@ -161,4 +167,17 @@ func (g *Git) GetGlobalUserName() (string, error) {
 // GetGlobalUserEmail returns user email from gits global config.
 func (g *Git) GetGlobalUserEmail() (string, error) {
 	return g.Run("config", "--global", "user.email")
+}
+
+func (g *Git) getPushURL() (string, error) {
+	remote, err := g.GetRemoteURL()
+	if err != nil {
+		return "", err
+	}
+
+	remote = strings.TrimPrefix(remote, "https://")
+	remote = strings.TrimPrefix(remote, "git@")
+	remote = strings.ReplaceAll(remote, ":", "/")
+
+	return fmt.Sprintf("https://%s:$GITHUB_TOKEN@%s", g.authorName, remote), nil
 }
