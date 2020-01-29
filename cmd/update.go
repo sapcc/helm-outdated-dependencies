@@ -160,7 +160,7 @@ func (u *updateCmd) update() error {
 	commitMessage := fmt.Sprintf("[%s] updated dependency to %s", chartName, strings.Join(depNames, ", "))
 
 	// If potential breaking changes are expected, use a pull request.
-	if (maxIncType == helm.IncTypes.Major || maxIncType == helm.IncTypes.Minor) && !u.isOnlyPullRequest {
+	if u.isOnlyPullRequest || maxIncType == helm.IncTypes.Major || maxIncType == helm.IncTypes.Minor {
 		return u.upstreamMajorChanges(commitMessage, chartName)
 	}
 
