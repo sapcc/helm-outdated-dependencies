@@ -28,10 +28,8 @@ import (
 )
 
 func stringSliceContains(stringSlice []string, searchString string) bool {
-	searchString = normalizeString(searchString)
 	for _, s := range stringSlice {
-		s = normalizeString(s)
-		if strings.Contains(s, searchString) || strings.Contains(searchString, s) {
+		if strings.Contains(normalizeString(searchString), normalizeString(s)) {
 			return true
 		}
 	}
