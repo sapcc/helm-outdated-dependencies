@@ -149,7 +149,7 @@ func (u *updateCmd) update() error {
 		if i := helm.GetIncType(dep.CurrentVersion, dep.LatestVersion); maxIncType.IsGreater(i) {
 			maxIncType = i
 		}
-		depNames[idx] = fmt.Sprintf("%s@%s", dep.Name, dep.Version)
+		depNames[idx] = fmt.Sprintf("%s@%s", dep.Name, dep.LatestVersion)
 	}
 
 	chartName, err := helm.GetChartName(u.chartPath)
