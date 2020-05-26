@@ -149,7 +149,11 @@ func (u *updateCmd) update() error {
 		if i := helm.GetIncType(dep.CurrentVersion, dep.LatestVersion); maxIncType.IsGreater(i) {
 			maxIncType = i
 		}
-		depNames[idx] = fmt.Sprintf("%s@%s", dep.Name, dep.LatestVersion)
+		depName := dep.Alias
+		if depName == "" {
+			depName = dep.Name
+		}
+		depNames[idx] = fmt.Sprintf("%s@%s",  depName, dep.LatestVersion)
 	}
 
 	chartName, err := helm.GetChartName(u.chartPath)
@@ -240,9 +244,13 @@ func (u *updateCmd) formatResults(results []*helm.Result) string {
 	table := uitable.New()
 	table.MaxColWidth = u.maxColumnWidth
 	table.AddRow("Updating the following dependencies to their latest version:")
-	table.AddRow("NAME", "VERSION", "LATEST_VERSION", "REPOSITORY")
+	table.AddRow("ALIAS", "VERSION", "LATEST_VERSION", "REPOSITORY")
 	for _, r := range results {
-		table.AddRow(r.Name, r.Version, r.LatestVersion, r.Repository)
+		name := r.Alias
+		if name == "" {
+			name = r.Name
+		}
+		table.AddRow(name, r.Version, r.LatestVersion, r.Repository)
 	}
 	return table.String()
 }
