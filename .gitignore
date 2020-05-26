@@ -2,3 +2,4 @@ bin/**
 dist/**
 vendor/**
 pkg/helm/fixtures/*yaml
+releases/**
