@@ -1,5 +1,5 @@
 name: "outdated-dependencies"
-version: "1.2.6"
+version: "1.2.7"
 usage: "Manage outdated dependencies of a helm chart"
 description: "This plugin helps to find and update outdated dependencies of a helm chart"
 command: "$HELM_PLUGIN_DIR/bin/helm-outdated-dependencies"

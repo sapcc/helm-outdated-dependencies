@@ -116,9 +116,13 @@ func (l *listCmd) formatResults(results []*helm.Result) string {
 	table := uitable.New()
 	table.MaxColWidth = l.maxColumnWidth
 	table.AddRow("The following dependencies are outdated:")
-	table.AddRow("NAME", "VERSION", "LATEST_VERSION", "REPOSITORY")
+	table.AddRow("ALIAS", "VERSION", "LATEST_VERSION", "REPOSITORY")
 	for _, r := range results {
-		table.AddRow(r.Name, r.Version, r.LatestVersion, r.Repository)
+		name := r.Alias
+		if name == "" {
+			name = r.Name
+		}
+		table.AddRow(name, r.Version, r.LatestVersion, r.Repository)
 	}
 	return table.String()
 }
