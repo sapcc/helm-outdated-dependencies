@@ -41,5 +41,4 @@ helm outdated-dependencies update <pathToChart> --auto-update --author-name=sapc
 
 ## RELEASE
 
-Releases are done via [goreleaser](https://github.com/goreleaser/goreleaser).  
-Tag the new release, export the `GORELEASER_GITHUB_TOKEN` (needs `repo` scope) and run `make release`.
+Update the version in the [plugin.yaml](plugin.yaml), export the `GORELEASER_GITHUB_TOKEN` (needs `repo` scope) and run `make release`.
