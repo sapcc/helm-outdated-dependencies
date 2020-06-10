@@ -10,8 +10,8 @@ builds:
     goarch:
       - amd64
 
-archive:
-  format: tar.gz
-  files:
-    - LICENSE
-    - plugin.yaml
+archives:
+  - format: tar.gz
+    files:
+      - LICENSE
+      - plugin.yaml
