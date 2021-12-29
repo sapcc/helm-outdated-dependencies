@@ -38,7 +38,7 @@ import (
 )
 
 const (
-	requirementsName  = "requirements.yaml"
+	requirementsName  = "Chart.yaml"
 	chartMetadataName = "Chart.yaml"
 	filePrefix        = "file://"
 )
